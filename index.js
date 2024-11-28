@@ -51,7 +51,7 @@ const handlePromptStream = async (req, res) => {
                 case 'thread.run.created':
                     if (process.env.OPENAI_WAITING_MESSAGE) {
                         setTimeout(() => {
-                            if (!isWriting) res.write(process.env.OPENAI_WAITING_MESSAGE)
+                            if (!isWriting) res.write(JSON.stringify({ type: 'text', content: process.env.OPENAI_WAITING_MESSAGE }))
                         }, +process.env.OPENAI_WAITING_TIMEOUT || 2000);
                     }
                     break;
@@ -59,7 +59,7 @@ const handlePromptStream = async (req, res) => {
                     isWriting = true;
                     const content = chunk.data.delta.content[0];
                     if (content.type == 'text') {
-                        res.write(content.text.value);
+                        res.write(JSON.stringify({ type: 'text', content: content.text.value }));
                     }
                     break;
                 case 'thread.message.completed':
