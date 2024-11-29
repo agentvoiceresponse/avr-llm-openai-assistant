@@ -36,7 +36,9 @@ const handlePromptStream = async (req, res) => {
     try {
         const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-        const threadResponse = await openai.beta.threads.create({ messages });
+        const filteredMessages = messages.filter(message => message.role !== 'system');
+
+        const threadResponse = await openai.beta.threads.create({ messages: filteredMessages });
         const threadId = threadResponse.id;
 
         const stream = await openai.beta.threads.runs.create(threadId, {
