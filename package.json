@@ -1,6 +1,6 @@
 {
   "name": "avr-llm-openai-assistant",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "author": "Giuseppe Careri",
   "description": "",
   "main": "index.js",
@@ -11,6 +11,7 @@
     "dc:push": "docker push agentvoiceresponse/avr-llm-openai-assistant:latest && docker push agentvoiceresponse/avr-llm-openai-assistant:${npm_package_version}"
   },
   "dependencies": {
+    "axios": "^1.7.9",
     "dotenv": "^16.4.5",
     "express": "^4.21.0",
     "openai": "^4.67.2"
