@@ -87,20 +87,25 @@ const handleStream = async (uuid, stream, res) => {
                                         console.log('External function not found:', function_name);
                                     }
 
-                                    const run = await openai.beta.threads.runs.submitToolOutputs(
-                                        chunk.data.thread_id,
-                                        chunk.data.id,
-                                        {
-                                            tool_outputs: [
-                                                {
-                                                    tool_call_id: tool_call.id,
-                                                    output: JSON.stringify(result ? result.data : { error: true, message: 'Function not found' })
-                                                },
-                                            ],
-                                            stream: true,
-                                        }
-                                    );
-                                    await handleStream(uuid, run, res);
+                                    if (!result) {
+                                        const run = await openai.beta.threads.runs.submitToolOutputs(
+                                            chunk.data.thread_id,
+                                            chunk.data.id,
+                                            {
+                                                tool_outputs: [
+                                                    {
+                                                        tool_call_id: tool_call.id,
+                                                        output: JSON.stringify(result ? result.data : { error: true, message: 'Function not found' })
+                                                    },
+                                                ],
+                                                stream: true,
+                                            }
+                                        );
+                                        await handleStream(uuid, run, res);
+                                    } else {
+                                        res.write(JSON.stringify({ type: 'text', content: 'Function not found' }));
+                                    }
+                                    break;
                                 } catch (error) {
                                     console.error('Error calling function:', error.message);
                                     res.write(JSON.stringify({ type: 'text', content: 'Error calling function' }));
