@@ -4,6 +4,7 @@
  * @author  Giuseppe Careri
  * @see https://www.gcareri.com
  */
+
 const express = require('express');
 const OpenAI = require('openai');
 const { resolve } = require('path');
@@ -20,28 +21,18 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const waitForActiveRun = async (threadId, maxRetries = 10, delay = 1000) => {
-    let retries = 0;
-
-    while (retries < maxRetries) {
+    for (let retries = 0; retries < maxRetries; retries++) {
         if (!activeRuns[threadId]) {
             console.log(`Run is no longer active: ${threadId}`);
-            return true; // Run is no longer active
+            return true;
         }
-
         console.log(`Run is still active: ${threadId}. Retry: ${retries}, Delay: ${delay / 1000} seconds`);
-        retries++;
         await sleep(delay);
     }
-
     console.log(`Timeout or retries exceeded: ${threadId}`);
-    return false; // Timeout or retries exceeded
-}
+    return false;
+};
 
-/**
- * Handles the stream of events from OpenAI API and sends appropriate responses to the client.
- * @param {AsyncIterable} stream - The stream of events from OpenAI API
- * @param {Object} res - The Express response object
- */
 const handleStream = async (uuid, stream, res) => {
     let isWriting = false;
     for await (const chunk of stream) {
@@ -62,68 +53,65 @@ const handleStream = async (uuid, stream, res) => {
                 }
                 break;
             case 'thread.run.requires_action':
-                switch (chunk.data.required_action.type) {
-                    case 'submit_tool_outputs':
-                        for (const tool_call of chunk.data.required_action.submit_tool_outputs.tool_calls) {
-                            if (tool_call.type === 'function') {
+                if (chunk.data.required_action.type === 'submit_tool_outputs') {
+                    for (const tool_call of chunk.data.required_action.submit_tool_outputs.tool_calls) {
+                        if (tool_call.type === 'function') {
+                            try {
+                                const function_name = tool_call.function.name;
+                                const function_args = JSON.parse(tool_call.function.arguments);
+                                function_args.uuid = uuid;
+                                console.log('Function:', function_name, 'Args:', function_args);
+
+                                let result = null;
                                 try {
-                                    const function_name = tool_call.function.name;
-                                    const function_args = JSON.parse(tool_call.function.arguments);
-                                    function_args.uuid = uuid;
-                                    console.log('Function:', function_name, 'Args:', function_args);
-
-                                    let result = null;
-                                    try {
-                                        const { default: avrFunction } = await import(resolve(__dirname, 'avr_functions', `${function_name}.js`));
-                                        result = await avrFunction(function_args);
-                                    } catch (error) {
-                                        console.log('AVR function not found:', function_name);
-                                    }
-
-                                    try {
-                                        const { default: externalFunction } = await import(resolve(__dirname, 'functions', `${function_name}.js`));
-                                        result = await externalFunction(function_args);
-                                    } catch (error) {
-                                        console.log('External function not found:', function_name);
-                                    }
-
-                                    const run = await openai.beta.threads.runs.submitToolOutputs(
-                                        chunk.data.thread_id,
-                                        chunk.data.id,
-                                        {
-                                            tool_outputs: [
-                                                {
-                                                    tool_call_id: tool_call.id,
-                                                    output: JSON.stringify(result ? result.data : { status: 'failure', message: 'Function not found' }),
-                                                },
-                                            ],
-                                            stream: true,
-                                        }
-                                    );
-                                    handleStream(uuid, run, res);
+                                    const { default: avrFunction } = await import(resolve(__dirname, 'avr_functions', `${function_name}.js`));
+                                    result = await avrFunction(function_args);
                                 } catch (error) {
-                                    console.error('Error calling function:', error.message);
-                                    const run = await openai.beta.threads.runs.submitToolOutputs(
-                                        chunk.data.thread_id,
-                                        chunk.data.id,
-                                        {
-                                            tool_outputs: [
-                                                {
-                                                    tool_call_id: tool_call.id,
-                                                    output: JSON.stringify({ status: 'failure', message: error.message }),
-                                                },
-                                            ],
-                                            stream: true,
-                                        }
-                                    );
-                                    handleStream(uuid, run, res);
+                                    console.log('AVR function not found:', function_name);
                                 }
+
+                                try {
+                                    const { default: externalFunction } = await import(resolve(__dirname, 'functions', `${function_name}.js`));
+                                    result = await externalFunction(function_args);
+                                } catch (error) {
+                                    console.log('External function not found:', function_name);
+                                }
+
+                                const run = await openai.beta.threads.runs.submitToolOutputs(
+                                    chunk.data.thread_id,
+                                    chunk.data.id,
+                                    {
+                                        tool_outputs: [
+                                            {
+                                                tool_call_id: tool_call.id,
+                                                output: JSON.stringify(result ? result.data : { status: 'failure', message: 'Function not found' }),
+                                            },
+                                        ],
+                                        stream: true,
+                                    }
+                                );
+                                handleStream(uuid, run, res);
+                            } catch (error) {
+                                console.error('Error calling function:', error.message);
+                                const run = await openai.beta.threads.runs.submitToolOutputs(
+                                    chunk.data.thread_id,
+                                    chunk.data.id,
+                                    {
+                                        tool_outputs: [
+                                            {
+                                                tool_call_id: tool_call.id,
+                                                output: JSON.stringify({ status: 'failure', message: error.message }),
+                                            },
+                                        ],
+                                        stream: true,
+                                    }
+                                );
+                                handleStream(uuid, run, res);
                             }
                         }
-                        break;
-                    default:
-                        console.log('Unhandled requires_action type:', chunk.data.required_action.type);
-                        break;
+                    }
+                } else {
+                    console.log('Unhandled requires_action type:', chunk.data.required_action.type);
                 }
                 break;
             case 'thread.run.completed':
@@ -134,25 +122,13 @@ const handleStream = async (uuid, stream, res) => {
         }
     }
     activeRuns[threadIds[uuid]] = false;
-}
+};
 
-/**
- * Handles a prompt stream from the client and uses the OpenAI API to generate
- * a response stream. The response stream is sent back to the client as a
- * series of Server-Sent Events.
- *
- * @param {Object} req - The Express request object
- * @param {Object} res - The Express response object
- */
 const handlePromptStream = async (req, res) => {
     const { uuid, message } = req.body;
 
-    if (!uuid) {
-        return res.status(400).json({ message: 'Uuid is required' });
-    }
-
-    if (!message) {
-        return res.status(400).json({ message: 'Message is required' });
+    if (!uuid || !message) {
+        return res.status(400).json({ message: `${!uuid ? 'Uuid' : 'Message'} is required` });
     }
 
     res.setHeader('Content-Type', 'text/event-stream');
@@ -166,23 +142,20 @@ const handlePromptStream = async (req, res) => {
             console.log('Created thread:', threadIds[uuid], 'for uuid:', uuid);
         }
 
-
         const runFinished = await waitForActiveRun(threadIds[uuid]);
         if (!runFinished) {
             console.warn('Run did not complete within the allowed time.');
-            res.status(400).json({ message: 'A run is already active. Please try again later.' });
-            return;
+            return res.status(400).json({ message: 'A run is already active. Please try again later.' });
         }
 
         activeRuns[threadIds[uuid]] = true;
 
-        // Add user message to the thread
         await openai.beta.threads.messages.create(threadIds[uuid], {
             role: "user",
             content: message,
         });
 
-        let stream = await openai.beta.threads.runs.create(threadIds[uuid], {
+        const stream = await openai.beta.threads.runs.create(threadIds[uuid], {
             assistant_id: process.env.OPENAI_ASSISTANT_ID,
             stream: true
         });
@@ -190,14 +163,12 @@ const handlePromptStream = async (req, res) => {
         handleStream(uuid, stream, res);
     } catch (error) {
         console.error('Error calling OpenAI API:', error.message);
-
         if (threadIds[uuid]) {
             activeRuns[threadIds[uuid]] = false;
         }
-
         res.status(500).json({ message: 'Error communicating with OpenAI' });
     }
-}
+};
 
 app.post('/prompt-stream', handlePromptStream);
 
