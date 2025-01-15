@@ -87,27 +87,36 @@ const handleStream = async (uuid, stream, res) => {
                                         console.log('External function not found:', function_name);
                                     }
 
-                                    if (result) {
-                                        const run = await openai.beta.threads.runs.submitToolOutputs(
-                                            chunk.data.thread_id,
-                                            chunk.data.id,
-                                            {
-                                                tool_outputs: [
-                                                    {
-                                                        tool_call_id: tool_call.id,
-                                                        output: JSON.stringify(result.data ? result.data : result)
-                                                    },
-                                                ],
-                                                stream: true,
-                                            }
-                                        );
-                                        await handleStream(uuid, run, res);
-                                    } else {
-                                        res.write(JSON.stringify({ type: 'text', content: 'Function not found' }));
-                                    }
+                                    const run = await openai.beta.threads.runs.submitToolOutputs(
+                                        chunk.data.thread_id,
+                                        chunk.data.id,
+                                        {
+                                            tool_outputs: [
+                                                {
+                                                    tool_call_id: tool_call.id,
+                                                    output: JSON.stringify(result ? result.data : { status: 'failure', message: 'Function not found' }),
+                                                },
+                                            ],
+                                            stream: true,
+                                        }
+                                    );
+                                    handleStream(uuid, run, res);
                                 } catch (error) {
                                     console.error('Error calling function:', error.message);
-                                    res.write(JSON.stringify({ type: 'text', content: 'Error calling function' }));
+                                    const run = await openai.beta.threads.runs.submitToolOutputs(
+                                        chunk.data.thread_id,
+                                        chunk.data.id,
+                                        {
+                                            tool_outputs: [
+                                                {
+                                                    tool_call_id: tool_call.id,
+                                                    output: JSON.stringify({ status: 'failure', message: error.message }),
+                                                },
+                                            ],
+                                            stream: true,
+                                        }
+                                    );
+                                    handleStream(uuid, run, res);
                                 }
                             }
                         }
@@ -178,7 +187,7 @@ const handlePromptStream = async (req, res) => {
             stream: true
         });
 
-        await handleStream(uuid, stream, res);
+        handleStream(uuid, stream, res);
     } catch (error) {
         console.error('Error calling OpenAI API:', error.message);
 
