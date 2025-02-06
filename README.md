@@ -113,7 +113,15 @@ The response will be streamed back as an event stream, where each chunk of text 
 
 ### Default Functions
 
-A new directory named `avr_functions` has been added to store default functions that developers can use. For example, the `avr_transfer` function can be used to transfer a call from one internal extension to another on Asterisk.
+A new directory named `avr_functions` has been added to store default functions that developers can use.
+
+#### `avr_transfer`
+
+The `avr_transfer` function can be used to transfer a call from one internal extension to another on Asterisk. Here is an example of how to define this function:
+
+#### `avr_hangup`
+
+The `avr_hangup` function can be used to hang up a call on Asterisk. Here is an example of how to define this function:
 
 ### Custom Functions
 
@@ -128,7 +136,7 @@ Developers can create custom functions by creating a `functions` directory and s
 }
 ```
 
-### Example Custom Function
+#### Example Custom Function
 
 Here is an example of a custom function to collect information during a call:
 
@@ -145,4 +153,86 @@ module.exports = async function (args) {
         return { data: { status: "failure", message: "Failed to store information." } };
     }
 };
+```
+
+### Important Notes for Function Implementation
+
+It is crucial that the function is exported using the following syntax:
+
+```javascript
+module.exports = async function (args) {};
+```
+
+In the arguments, besides receiving those configured through the assistants, the `uuid` of the call will also be passed. Another very important aspect is to return an object of the type:
+
+```json
+{
+  "data": {}
+}
+```
+
+The `data` object should contain the necessary information for the function's operation.
+
+### Configuring OpenAI Functions
+
+To use functions with OpenAI, you need to configure them in the Assistants section. Specifically, in the functions section, you must declare the functions and their structure, including the parameters to be passed.
+
+#### Default Functions Configuration
+
+To use the default `avr_transfer` and `avr_hangup` functions, declare the functions as follows:
+
+##### `avr_hangup`
+
+```json
+{
+  "name": "avr_hangup",
+  "description": "Ends the conversation once the maintenance is booked or if no availability is found.",
+  "strict": false,
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": []
+  }
+}
+```
+
+##### `avr_transfer`
+
+```json
+{
+  "name": "avr_transfer",
+  "description": "Transfers a customer based on the bill type.",
+  "strict": false,
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "transfer_extension": {
+        "type": "integer",
+        "description": "The transfer extension for the bill type (600 for phone, 601 for gas, 602 for electricity)."
+      },
+      "transfer_context": {
+        "type": "string",
+        "description": "The context for the transfer. Default is 'demo'.",
+        "default": "demo"
+      },
+      "transfer_priority": {
+        "type": "integer",
+        "description": "The priority level of the transfer. Default is 1.",
+        "default": 1
+      }
+    },
+    "required": [
+      "transfer_extension"
+    ]
+  }
+}
+```
+
+### Using Custom Functions with Docker
+
+If you decide to use custom functions while running the application with Docker, you need to mount the volume containing the `functions` directory to `/usr/src/app/functions`. Here is an example of how to configure the volume in your Docker setup:
+
+```yaml
+volumes:
+  - ./functions:/usr/src/app/functions
 ```
