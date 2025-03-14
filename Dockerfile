@@ -22,6 +22,8 @@ COPY --chown=node:node avr_functions/avr_hangup.js avr_functions/avr_hangup.js
 
 COPY --chown=node:node index.js index.js
 
+RUN mkdir -p /usr/src/app/functions && chown -R node:node /usr/src/app/functions
+
 USER node
 
 CMD [ "node", "index.js" ]
