@@ -28,15 +28,57 @@ const RETRY_DELAY = process.env.RETRY_DELAY || 1000;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const waitForActiveRun = async (threadId, maxRetries = MAX_RETRIES, delay = RETRY_DELAY) => {
+    if (!activeRuns[threadId]) {
+        return true;
+    }
+
+    // Check if the run is actually still active on OpenAI's side
+    try {
+        const runs = await openai.beta.threads.runs.list(threadId);
+        const activeRun = runs.data.find(run => 
+            ['in_progress', 'queued', 'requires_action'].includes(run.status)
+        );
+        
+        if (!activeRun) {
+            console.log(`No active run found on OpenAI for thread: ${threadId}`);
+            activeRuns[threadId] = false;
+            return true;
+        }
+        
+        console.log(`Found active run ${activeRun.id} with status ${activeRun.status}`);
+    } catch (error) {
+        console.error('Error checking run status:', error);
+        // If we can't check, we'll fall back to the retry logic
+    }
+
     for (let retries = 0; retries < maxRetries; retries++) {
         if (!activeRuns[threadId]) {
             console.log(`Run is no longer active: ${threadId}`);
             return true;
         }
-        console.log(`Run is still active: ${threadId}. Retry: ${retries}, Delay: ${delay / 1000} seconds`);
+        console.log(`Run is still active: ${threadId}. Retry: ${retries + 1}/${maxRetries}, Delay: ${delay / 1000} seconds`);
         await sleep(delay);
     }
+
+    // If we reach here, we've exceeded retries
     console.log(`Timeout or retries exceeded: ${threadId}`);
+    
+    try {
+        // Try to cancel any active run
+        const runs = await openai.beta.threads.runs.list(threadId);
+        const activeRun = runs.data.find(run => 
+            ['in_progress', 'queued', 'requires_action'].includes(run.status)
+        );
+        
+        if (activeRun) {
+            console.log(`Attempting to cancel run ${activeRun.id}`);
+            await openai.beta.threads.runs.cancel(threadId, activeRun.id);
+        }
+    } catch (error) {
+        console.error('Error cancelling active run:', error);
+    }
+    
+    activeRuns[threadId] = false;
     return false;
 };
 
@@ -247,20 +289,37 @@ const handlePromptStream = async (req, res) => {
             console.log('Created thread:', threadIds[uuid], 'for uuid:', uuid);
         }
 
-        const runFinished = await waitForActiveRun(threadIds[uuid]);
+        const threadId = threadIds[uuid];
+        
+        // Check for active run and wait/cancel if necessary
+        const runFinished = await waitForActiveRun(threadId);
         if (!runFinished) {
-            console.warn('Run did not complete within the allowed time.');
-            return res.status(400).json({ message: 'A run is already active. Please try again later.' });
+            return res.status(429).json({ 
+                message: 'A run is already active and could not be cancelled. Please try again later.',
+                threadId: threadId
+            });
         }
 
-        activeRuns[threadIds[uuid]] = true;
+        // Set active flag before creating the message
+        activeRuns[threadId] = true;
 
-        await openai.beta.threads.messages.create(threadIds[uuid], {
-            role: "user",
-            content: message,
-        });
+        try {
+            await openai.beta.threads.messages.create(threadId, {
+                role: "user",
+                content: message,
+            });
+        } catch (error) {
+            activeRuns[threadId] = false;
+            if (error.status === 400 && error.message.includes("while a run")) {
+                return res.status(429).json({ 
+                    message: 'Another request is in progress. Please try again in a few seconds.',
+                    threadId: threadId
+                });
+            }
+            throw error;
+        }
 
-        const stream = await openai.beta.threads.runs.create(threadIds[uuid], {
+        const stream = await openai.beta.threads.runs.create(threadId, {
             assistant_id: process.env.OPENAI_ASSISTANT_ID,
             stream: true
         });
@@ -271,7 +330,10 @@ const handlePromptStream = async (req, res) => {
         if (threadIds[uuid]) {
             activeRuns[threadIds[uuid]] = false;
         }
-        res.status(500).json({ message: 'Error communicating with OpenAI' });
+        res.status(error.status || 500).json({ 
+            message: 'Error communicating with OpenAI',
+            error: error.message
+        });
     }
 };
 
