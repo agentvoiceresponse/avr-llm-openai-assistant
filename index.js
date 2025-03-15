@@ -8,15 +8,14 @@
 const express = require('express');
 const OpenAI = require('openai');
 const { resolve } = require('path');
-const threadIds = {};
-const activeRuns = {};
-
 require('dotenv').config();
 
 const app = express();
 app.use(express.json());
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const threadIds = {};
+const activeRuns = {};
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -33,20 +32,62 @@ const waitForActiveRun = async (threadId, maxRetries = 10, delay = 1000) => {
     return false;
 };
 
+const handleFunctionCall = async (uuid, tool_call, chunk, res) => {
+    const function_name = tool_call.function.name;
+    const function_args = JSON.parse(tool_call.function.arguments);
+    function_args.uuid = uuid;
+    console.log('Function:', function_name, 'Args:', function_args);
+
+    let result = null;
+    try {
+        const { default: avrFunction } = await import(resolve(__dirname, 'avr_functions', `${function_name}.js`));
+        result = await avrFunction(function_args);
+    } catch (error) {
+        console.log('AVR function not found:', function_name);
+    }
+
+    try {
+        const { default: externalFunction } = await import(resolve(__dirname, 'functions', `${function_name}.js`));
+        result = await externalFunction(function_args);
+    } catch (error) {
+        console.log('External function not found:', function_name);
+    }
+
+    const run = await openai.beta.threads.runs.submitToolOutputs(
+        chunk.data.thread_id,
+        chunk.data.id,
+        {
+            tool_outputs: [
+                {
+                    tool_call_id: tool_call.id,
+                    output: JSON.stringify(result ? result.data : { status: 'failure', message: 'Function not found' }),
+                },
+            ],
+            stream: true,
+        }
+    );
+    handleStream(uuid, run, res);
+};
+
 const handleStream = async (uuid, stream, res) => {
     let isWriting = false;
+    let waitingMessageTimeout;
+
     for await (const chunk of stream) {
         console.log(chunk.event);
         switch (chunk.event) {
             case 'thread.run.created':
                 if (process.env.OPENAI_WAITING_MESSAGE) {
-                    setTimeout(() => {
-                        if (!isWriting) res.write(JSON.stringify({ type: 'text', content: process.env.OPENAI_WAITING_MESSAGE }));
+                    waitingMessageTimeout = setTimeout(() => {
+                        if (!isWriting) {
+                            res.write(JSON.stringify({ type: 'text', content: process.env.OPENAI_WAITING_MESSAGE }));
+                        }
                     }, +process.env.OPENAI_WAITING_TIMEOUT || 2000);
                 }
                 break;
             case 'thread.message.delta':
                 isWriting = true;
+                clearTimeout(waitingMessageTimeout);
                 const content = chunk.data.delta.content[0];
                 if (content.type === 'text') {
                     res.write(JSON.stringify({ type: 'text', content: content.text.value }));
@@ -57,40 +98,7 @@ const handleStream = async (uuid, stream, res) => {
                     for (const tool_call of chunk.data.required_action.submit_tool_outputs.tool_calls) {
                         if (tool_call.type === 'function') {
                             try {
-                                const function_name = tool_call.function.name;
-                                const function_args = JSON.parse(tool_call.function.arguments);
-                                function_args.uuid = uuid;
-                                console.log('Function:', function_name, 'Args:', function_args);
-
-                                let result = null;
-                                try {
-                                    const { default: avrFunction } = await import(resolve(__dirname, 'avr_functions', `${function_name}.js`));
-                                    result = await avrFunction(function_args);
-                                } catch (error) {
-                                    console.log('AVR function not found:', function_name);
-                                }
-
-                                try {
-                                    const { default: externalFunction } = await import(resolve(__dirname, 'functions', `${function_name}.js`));
-                                    result = await externalFunction(function_args);
-                                } catch (error) {
-                                    console.log('External function not found:', function_name);
-                                }
-
-                                const run = await openai.beta.threads.runs.submitToolOutputs(
-                                    chunk.data.thread_id,
-                                    chunk.data.id,
-                                    {
-                                        tool_outputs: [
-                                            {
-                                                tool_call_id: tool_call.id,
-                                                output: JSON.stringify(result ? result.data : { status: 'failure', message: 'Function not found' }),
-                                            },
-                                        ],
-                                        stream: true,
-                                    }
-                                );
-                                handleStream(uuid, run, res);
+                                await handleFunctionCall(uuid, tool_call, chunk, res);
                             } catch (error) {
                                 console.error('Error calling function:', error.message);
                                 const run = await openai.beta.threads.runs.submitToolOutputs(
