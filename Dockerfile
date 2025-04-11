@@ -20,6 +20,8 @@ COPY --chown=node:node avr_functions/avr_transfer.js avr_functions/avr_transfer.
 
 COPY --chown=node:node avr_functions/avr_hangup.js avr_functions/avr_hangup.js
 
+COPY --chown=node:node loadFunctions.js loadFunctions.js
+
 COPY --chown=node:node index.js index.js
 
 RUN mkdir -p /usr/src/app/functions && chown -R node:node /usr/src/app/functions
