@@ -91,65 +91,76 @@ const handlePromptStream = async (req, res) => {
     });
 
     console.log("Starting assistant response stream");
-    const run = await openai.beta.threads.runs
+    const stream = await openai.beta.threads.runs
       .stream(threadIds[uuid], {
         assistant_id: process.env.OPENAI_ASSISTANT_ID,
       })
       .on("toolCallDone", async (toolCall) => {
         console.log("Tool call done", toolCall);
-        const functionName = toolCall.function.name;
-        const functionArgs = toolCall.function.arguments;
+        switch (toolCall.type) {
+          case "function":
+            const functionName = toolCall.function.name;
+            const functionArgs = toolCall.function.arguments;
 
-        console.log(`>> AI function call: ${functionName}`);
-        console.log(`>> AI function call args: ${functionArgs}`);
+            console.log(`>> AI function call: ${functionName}`);
+            console.log(`>> AI function call args: ${functionArgs}`);
 
-        try {
-          const handler = getFunctionHandler(functionName);
-          if (handler) {
-            const functionArgs = {
-              ...JSON.parse(toolCall.function.arguments),
-              uuid,
-            };
-            const content = await handler(functionArgs);
-            console.log(
-              `>> Function response: ${functionName} ->`,
-              content.data
-            );
-            res.write(
-              JSON.stringify({
-                type: "text",
-                content: content.data?.message || "",
-              })
-            );
-            await openai.beta.threads.runs.submitToolOutputs(
-              threadIds[uuid],
-              run.id,
-              {
-                tool_outputs: [
+            try {
+              const handler = getFunctionHandler(functionName);
+              if (handler) {
+                const functionArgs = {
+                  ...JSON.parse(toolCall.function.arguments),
+                  uuid,
+                };
+                const content = await handler(functionArgs);
+                console.log(
+                  `>> Function response: ${functionName} ->`,
+                  content.data
+                );
+                res.write(
+                  JSON.stringify({
+                    type: "text",
+                    content: content.data?.message || "",
+                  })
+                );
+                const run = stream.currentRun();
+                console.log("Submitting tool outputs", run.assistant_id);
+                await openai.beta.threads.runs.submitToolOutputs(
+                  threadIds[uuid],
+                  run.id,
                   {
-                    tool_call_id: toolCall.id,
-                    output: JSON.stringify(content.data),
-                  },
-                ],
+                    tool_outputs: [
+                      {
+                        tool_call_id: toolCall.id,
+                        output: JSON.stringify(content.data),
+                      },
+                    ],
+                  }
+                );
               }
-            );
-          }
-        } catch (error) {
-          // Handle errors during function execution
-          console.error(`Error executing function ${functionName}:`, error);
-          res.write(
-            JSON.stringify({
-              type: "text",
-              content: `I encountered an error while processing your request.`,
-            })
-          );
-        }
+            } catch (error) {
+              // Handle errors during function execution
+              console.error(`Error executing function ${functionName}:`, error);
+              res.write(
+                JSON.stringify({
+                  type: "text",
+                  content: `I encountered an error while processing your request.`,
+                })
+              );
+            }
 
-        res.end();
+            res.end();
+            break;
+          default:
+            break;
+        }
+        
       })
+
       .on("textDelta", (textDelta) => {
         res.write(JSON.stringify({ type: "text", content: textDelta.value }));
       })
+
       .on("textDone", (textDone) => {
         console.log(">> AI response: ", textDone.value);
         res.end();
